@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  web:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://user:password@db:5432/nexa_calls
+      - SECRET_KEY=your-production-secret-key
+    depends_on:
+      - db
+      - redis
+
+  db:
+    image: postgres:13
+    environment:
+      - POSTGRES_DB=nexa_calls
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+volumes:
+  postgres_data:
