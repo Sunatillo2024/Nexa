@@ -1,11 +1,18 @@
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-import os
+from .config import settings
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:1111@localhost:5432/nexa_db")
+Base = declarative_base()
 
-engine = create_engine(DATABASE_URL)
+engine = create_engine(
+    settings.DATABASE_URL,
+    pool_pre_ping=True,
+    pool_size=10,
+    max_overflow=20,
+    echo=settings.DEBUG
+)
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
@@ -15,3 +22,8 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def init_db():
+    from . import models
+    Base.metadata.create_all(bind=engine)

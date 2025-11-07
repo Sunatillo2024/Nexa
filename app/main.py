@@ -1,67 +1,141 @@
+import logging
+
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from datetime import datetime
-import time
+from contextlib import asynccontextmanager
+from .redis_client import redis_client
+from . import models, schemas, crud, auth
+from .database import get_db, init_db
+from .config import settings
+from .webrtc import webrtc_manager
 
-from starlette.responses import JSONResponse
 
-from . import models, schemas, crud, database, webrtc, auth
-from .database import engine
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print("🚀 Starting Nexa Call API...")
+    init_db()
+    print("✅ Database initialized")
+    yield
+    print("👋 Shutting down...")
+    redis_client.close()
 
-# Create tables
-models.Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="Nexa Call API", version="1.0.0")
+app = FastAPI(
+    title=settings.APP_NAME,
+    version=settings.APP_VERSION,
+    lifespan=lifespan,
+    debug=settings.DEBUG,
+)
 
-# CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Rate limiting storage (in-memory for MVP)
-rate_limit_storage = {}
+
+@app.middleware("http")
+async def log_requests(request, call_next):
+    start_time = datetime.utcnow()
+    response = await call_next(request)
+    process_time = (datetime.utcnow() - start_time).total_seconds()
+    response.headers["X-Process-Time"] = str(process_time)
+    return response
 
 
-def rate_limit(key: str, limit: int = 10, window: int = 60):
-    """Simple rate limiting"""
-    current_time = time.time()
-    window_start = current_time - window
+@app.post("/api/auth/register", response_model=schemas.UserResponse, status_code=status.HTTP_201_CREATED)
+def register_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
+    try:
+        existing_user = crud.get_user_by_username(db, user.username)
+        if existing_user:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Username already registered"
+            )
+        existing_email = crud.get_user_by_email(db, user.email)
+        if existing_email:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email already registered"
+            )
+        db_user = crud.create_user(db, user)
+        return db_user
 
-    # Clean old entries
-    rate_limit_storage[key] = [
-        timestamp for timestamp in rate_limit_storage.get(key, [])
-        if timestamp > window_start
-    ]
-
-    if len(rate_limit_storage[key]) >= limit:
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        print(f"Registration error: {str(e)}")
+        print(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Rate limit exceeded"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Registration failed: {str(e)}"
         )
 
-    rate_limit_storage[key].append(current_time)
+
+@app.post("/api/auth/login", response_model=schemas.Token)
+def login(user_login: schemas.UserLogin, db: Session = Depends(get_db)):
+    user = auth.authenticate_user(db, user_login.username, user_login.password)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    access_token = auth.create_access_token(data={"sub": user.id})
+    return {"access_token": access_token, "token_type": "bearer"}
+
+
+@app.get("/api/auth/me", response_model=schemas.UserResponse)
+def get_current_user_info(
+        user_id: str = Depends(auth.verify_token),
+        db: Session = Depends(get_db)
+):
+    user = crud.get_user_by_id(db, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
 
 
 @app.post("/api/calls/start", response_model=schemas.CallResponse)
 def start_call(
         call: schemas.CallStart,
-        db: Session = Depends(database.get_db),
+        db: Session = Depends(get_db),
         user_id: str = Depends(auth.verify_token)
 ):
-    # Rate limiting
-    rate_limit(f"start_call:{user_id}", limit=5, window=60)
+    rate_limit_key = f"call_start:{user_id}"
+    if not redis_client.check_rate_limit(
+            rate_limit_key,
+            settings.RATE_LIMIT_CALLS,
+            settings.RATE_LIMIT_WINDOW
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many call attempts. Please wait."
+        )
 
-    # Create WebRTC channel
-    webrtc_channel = webrtc.webrtc_manager.create_channel(
-        call.caller_id, call.receiver_id
-    )
+    caller = crud.get_user_by_id(db, call.caller_id)
+    if not caller:
+        raise HTTPException(status_code=404, detail="Caller not found")
 
-    # Create call in database
+    receiver = crud.get_user_by_id(db, call.receiver_id)
+    if not receiver:
+        raise HTTPException(status_code=404, detail="Receiver not found")
+
+    receiver_status = redis_client.get_user_status(call.receiver_id)
+    if receiver_status.get("status") != "online":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Receiver is not online"
+        )
+
+    webrtc_channel = webrtc_manager.create_channel(call.caller_id, call.receiver_id)
+
     db_call = crud.create_call(db, call, webrtc_channel)
 
     return schemas.CallResponse(
@@ -77,89 +151,247 @@ def start_call(
 @app.post("/api/calls/end", response_model=schemas.CallEndResponse)
 def end_call(
         call_end: schemas.CallEnd,
-        db: Session = Depends(database.get_db),
+        db: Session = Depends(get_db),
         user_id: str = Depends(auth.verify_token)
 ):
-    db_call = crud.end_call(db, call_end.call_id)
+    db_call = crud.get_call_by_id(db, call_end.call_id)
 
     if not db_call:
         raise HTTPException(status_code=404, detail="Call not found")
 
-    # Calculate duration
+    if user_id not in [db_call.caller_id, db_call.receiver_id]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You are not part of this call"
+        )
+
+    db_call = crud.end_call(db, call_end.call_id)
+
+    if not db_call:
+        raise HTTPException(status_code=400, detail="Call already ended")
+
     if db_call.ended_at and db_call.started_at:
         duration = db_call.ended_at - db_call.started_at
-        duration_str = str(duration)
+        hours, remainder = divmod(duration.total_seconds(), 3600)
+        minutes, seconds = divmod(remainder, 60)
+        duration_str = f"{int(hours):02d}:{int(minutes):02d}:{int(seconds):02d}"
     else:
         duration_str = "00:00:00"
 
-    # Close WebRTC channel
-    webrtc.webrtc_manager.close_channel(db_call.webrtc_channel)
+    webrtc_manager.close_channel(db_call.webrtc_channel)
 
     return schemas.CallEndResponse(
         status="ended",
-        duration=duration_str
+        duration=duration_str,
+        ended_at=db_call.ended_at
     )
 
 
 @app.get("/api/calls/active", response_model=list[schemas.ActiveCall])
 def get_active_calls(
-        db: Session = Depends(database.get_db),
+        db: Session = Depends(get_db),
         user_id: str = Depends(auth.verify_token)
 ):
-    active_calls = crud.get_active_calls(db)
+    active_calls = crud.get_active_calls(db, user_id)
     return [
         schemas.ActiveCall(
             call_id=call.id,
             caller_id=call.caller_id,
             receiver_id=call.receiver_id,
             started_at=call.started_at,
-            webrtc_channel=call.webrtc_channel
+            webrtc_channel=call.webrtc_channel,
+            status=call.status.value
         )
         for call in active_calls
     ]
 
 
-@app.post("/api/presence/{user_id}/{status}")
+@app.get("/api/calls/history")
+def get_call_history(
+        limit: int = 50,
+        offset: int = 0,
+        db: Session = Depends(get_db),
+        user_id: str = Depends(auth.verify_token)
+):
+    calls = crud.get_user_call_history(db, user_id, limit, offset)
+    return {
+        "calls": [
+            {
+                "call_id": call.id,
+                "caller_id": call.caller_id,
+                "receiver_id": call.receiver_id,
+                "started_at": call.started_at,
+                "ended_at": call.ended_at,
+                "status": call.status.value,
+                "duration": str(call.ended_at - call.started_at) if call.ended_at else None
+            }
+            for call in calls
+        ],
+        "total": len(calls),
+        "limit": limit,
+        "offset": offset
+    }
+
+
+@app.post("/api/presence/update")
 def update_presence(
-        user_id: str,
         status: str,
-        db: Session = Depends(database.get_db),
-        auth_user_id: str = Depends(auth.verify_token)
+        db: Session = Depends(get_db),
+        user_id: str = Depends(auth.verify_token)
 ):
-    if status not in ["online", "offline"]:
-        raise HTTPException(status_code=400, detail="Status must be 'online' or 'offline'")
+    valid_statuses = ["online", "offline", "away"]
+    if status not in valid_statuses:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Status must be one of: {', '.join(valid_statuses)}"
+        )
 
-    presence = crud.update_user_presence(db, user_id, status)
-    return {"status": "success", "user_status": presence.status}
+    presence_status = models.PresenceStatus(status)
+    presence = crud.update_user_presence(db, user_id, presence_status)
+
+    if status == "online":
+        redis_client.set_user_online(user_id)
+    else:
+        redis_client.set_user_offline(user_id)
+
+    return {
+        "status": "success",
+        "user_status": presence.status.value,
+        "last_seen": presence.last_seen
+    }
 
 
-@app.get("/api/presence/{user_id}")
+@app.get("/api/presence/{target_user_id}")
 def get_presence(
-        user_id: str,
-        db: Session = Depends(database.get_db),
-        auth_user_id: str = Depends(auth.verify_token)
+        target_user_id: str,
+        db: Session = Depends(get_db),
+        user_id: str = Depends(auth.verify_token)
 ):
-    presence = crud.get_user_presence(db, user_id)
+    redis_status = redis_client.get_user_status(target_user_id)
+    if redis_status.get("status") == "online":
+        return redis_status
+
+    presence = crud.get_user_presence(db, target_user_id)
     if not presence:
-        return {"status": "offline"}
-    return {"status": presence.status, "last_seen": presence.last_seen}
+        return {"status": "offline", "last_seen": None}
+
+    return {
+        "status": presence.status.value,
+        "last_seen": presence.last_seen
+    }
 
 
-# Health check endpoint
-@app.get("/health")
-def health_check():
-    return {"status": "healthy", "timestamp": datetime.utcnow()}
+@app.get("/api/presence/online/list")
+def get_online_users(
+        db: Session = Depends(get_db),
+        user_id: str = Depends(auth.verify_token)
+):
+    online_users = crud.get_online_users(db)
+    return {
+        "online_users": [
+            {
+                "user_id": presence.user_id,
+                "status": presence.status.value,
+                "last_seen": presence.last_seen
+            }
+            for presence in online_users
+        ],
+        "count": len(online_users)
+    }
 
 
-# Error handling middleware
+@app.post("/api/webrtc/signal")
+def send_webrtc_signal(
+        signal: schemas.WebRTCSignal,
+        user_id: str = Depends(auth.verify_token)
+):
+    success = redis_client.store_webrtc_signal(signal.call_id, {
+        "type": signal.signal_type,
+        "data": signal.signal_data,
+        "from": user_id,
+        "timestamp": datetime.utcnow().isoformat()
+    })
+
+    if not success:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to store signaling data"
+        )
+
+    return {"status": "success"}
+
+
+@app.get("/api/webrtc/signal/{call_id}")
+def get_webrtc_signals(
+        call_id: str,
+        user_id: str = Depends(auth.verify_token)
+):
+    signals = redis_client.get_webrtc_signals(call_id)
+    return {"signals": signals}
+
+
+@app.get("/health", response_model=schemas.HealthCheck)
+def health_check(db: Session = Depends(get_db)):
+    try:
+        db.execute("SELECT 1")
+        db_status = "healthy"
+    except Exception as e:
+        db_status = f"unhealthy: {str(e)}"
+
+    # Check Redis
+    redis_status = "healthy" if redis_client.is_connected() else "unhealthy"
+
+    return {
+        "status": "healthy" if db_status == "healthy" and redis_status == "healthy" else "degraded",
+        "timestamp": datetime.utcnow(),
+        "database": db_status,
+        "redis": redis_status
+    }
+
+
+@app.get("/")
+def root():
+    return {
+        "name": settings.APP_NAME,
+        "version": settings.APP_VERSION,
+        "docs": "/docs",
+        "health": "/health"
+    }
+
+
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request, exc):
     return JSONResponse(
         status_code=exc.status_code,
-        content={"detail": exc.detail},
+        content={"detail": exc.detail, "timestamp": datetime.utcnow().isoformat()},
     )
+
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request, exc):
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "Internal server error",
+            "timestamp": datetime.utcnow().isoformat()
+        },
+    )
+
+
+@app.get("/debug/users")
+def debug_users(db: Session = Depends(get_db)):
+    """Debug endpoint to check users table"""
+    try:
+        users = db.query(models.User).all()
+        return {
+            "total_users": len(users),
+            "users": [{"id": u.id, "username": u.username} for u in users]
+        }
+    except Exception as e:
+        return {"error": str(e)}
 
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+    uvicorn.run(app, host="0.0.0.0", port=8000, reload=settings.DEBUG)
