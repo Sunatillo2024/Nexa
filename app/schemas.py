@@ -45,7 +45,7 @@ class CallStart(BaseModel):
     caller_id: str = Field(..., description="ID of the user starting the call")
     receiver_id: str = Field(..., description="ID of the user receiving the call")
 
-    @validator('receiver_id')
+    @field_validator('receiver_id')
     def validate_receiver(cls, v, values):
         if 'caller_id' in values and v == values['caller_id']:
             raise ValueError('Cannot call yourself')
