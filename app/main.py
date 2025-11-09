@@ -2,12 +2,11 @@ from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from sqlalchemy.orm import Session
-from sqlalchemy import text  # Добавляем импорт text
+from sqlalchemy import text
 
 from .core.config import settings
 from .db.session import init_db, get_db
-from .api.routes import auth, calls
-from .api import routes as api_routes
+from .api.routes import auth, calls, sessions, users  # Added users
 from .api.websocket import websocket_endpoint
 
 
@@ -56,11 +55,8 @@ app.add_middleware(
 # Include routers
 app.include_router(auth.router, prefix="/api")
 app.include_router(calls.router, prefix="/api")
-
-# Import sessions router
-from .api.routes import sessions
-
 app.include_router(sessions.router, prefix="/api")
+app.include_router(users.router, prefix="/api")
 
 # WebSocket endpoint
 app.add_api_websocket_route("/ws/{user_id}", websocket_endpoint)
@@ -81,7 +77,6 @@ def root():
 def health_check(db: Session = Depends(get_db)):
     """Health check endpoint"""
     try:
-        # ИСПРАВЛЕНО: используем text() для сырого SQL
         db.execute(text("SELECT 1"))
         return {
             "status": "healthy",

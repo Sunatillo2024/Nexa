@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nexa Call Client</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            max-width: 600px;
+            width: 100%;
+        }
+
+        h1 {
+            color: #667eea;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+
+        .section {
+            margin-bottom: 25px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: 600;
+        }
+
+        input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border 0.3s;
+        }
+
+        input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        button {
+            width: 100%;
+            padding: 14px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-top: 10px;
+        }
+
+        button:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .status {
+            padding: 12px;
+            border-radius: 8px;
+            margin-top: 15px;
+            font-weight: 500;
+        }
+
+        .status.connected {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .status.disconnected {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        .status.calling {
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeeba;
+        }
+
+        .log {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 15px;
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            margin-top: 20px;
+        }
+
+        .log-entry {
+            margin-bottom: 5px;
+            padding: 5px;
+            border-radius: 4px;
+        }
+
+        .log-entry.info {
+            background: #d1ecf1;
+            color: #0c5460;
+        }
+
+        .log-entry.success {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .log-entry.error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .buttons-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+
+        .video-container {
+            display: none;
+            margin-top: 20px;
+        }
+
+        .video-container.active {
+            display: block;
+        }
+
+        video {
+            width: 100%;
+            border-radius: 8px;
+            background: #000;
+            margin-bottom: 10px;
+        }
+
+        .user-card {
+            padding: 10px;
+            margin: 5px 0;
+            background: white;
+            border-radius: 6px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: transform 0.2s;
+        }
+
+        .user-card:hover {
+            transform: translateX(5px);
+        }
+
+        .user-card button:hover:not(:disabled) {
+            background: #5568d3;
+        }
+
+        .user-card button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📞 Nexa Call Client</h1>
+
+        <!-- Auth Section -->
+        <div class="section" id="authSection">
+            <label>Username:</label>
+            <input type="text" id="username" placeholder="Enter username" value="alice">
+
+            <label>Password:</label>
+            <input type="password" id="password" placeholder="Enter password" value="password123">
+
+            <div class="buttons-row">
+                <button onclick="register()">Register</button>
+                <button onclick="login()">Login</button>
+            </div>
+        </div>
+
+        <!-- Call Section -->
+        <div class="section" id="callSection" style="display: none;">
+            <label>Your User ID:</label>
+            <input type="text" id="myUserId" readonly>
+
+            <div class="buttons-row">
+                <button onclick="connectWebSocket()">Connect</button>
+                <button onclick="disconnectWebSocket()" style="background: #dc3545;">Disconnect</button>
+            </div>
+
+            <button onclick="refreshUsers()" id="refreshBtn" disabled>🔄 Refresh Users</button>
+
+            <!-- Online Users List -->
+            <div id="usersSection" style="display: none; margin-top: 20px;">
+                <label>Online Users:</label>
+                <div id="usersList" style="background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 8px; padding: 10px; max-height: 200px; overflow-y: auto;"></div>
+            </div>
+
+            <label style="margin-top: 15px;">Or Enter User ID:</label>
+            <input type="text" id="targetUserId" placeholder="Enter user ID to call">
+
+            <button onclick="startCall()" id="startCallBtn" disabled>Start Call</button>
+            <button onclick="endCall()" id="endCallBtn" disabled style="background: #dc3545;">End Call</button>
+        </div>
+
+        <!-- Video Section -->
+        <div class="video-container" id="videoContainer">
+            <video id="localVideo" autoplay muted></video>
+            <video id="remoteVideo" autoplay></video>
+        </div>
+
+        <!-- Status -->
+        <div id="status" class="status disconnected">Disconnected</div>
+
+        <!-- Log -->
+        <div class="log" id="log"></div>
+    </div>
+
+    <script>
+        let ws = null;
+        let userId = null;
+        let sessionId = null;
+        let peerConnection = null;
+        let localStream = null;
+        let authToken = null;
+
+        const API_URL = 'http://127.0.0.1:8000';
+        const WS_URL = 'ws://127.0.0.1:8000';
+
+        // ICE servers
+        const iceServers = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' }
+            ]
+        };
+
+        function log(message, type = 'info') {
+            const logDiv = document.getElementById('log');
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${type}`;
+            entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            logDiv.appendChild(entry);
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        function updateStatus(message, className) {
+            const status = document.getElementById('status');
+            status.textContent = message;
+            status.className = `status ${className}`;
+        }
+
+        async function register() {
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+
+            try {
+                const response = await fetch(`${API_URL}/api/auth/register`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        username,
+                        email: `${username}@example.com`,
+                        password
+                    })
+                });
+
+                const data = await response.json();
+                if (response.ok) {
+                    log(`Registered successfully: ${data.username}`, 'success');
+                    alert('Registration successful! Please login.');
+                } else {
+                    log(`Registration failed: ${data.detail}`, 'error');
+                }
+            } catch (error) {
+                log(`Error: ${error.message}`, 'error');
+            }
+        }
+
+        async function login() {
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+
+            try {
+                const response = await fetch(`${API_URL}/api/auth/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+
+                const data = await response.json();
+                if (response.ok) {
+                    // Get user info
+                    const userResponse = await fetch(`${API_URL}/api/auth/me`, {
+                        headers: { 'Authorization': `Bearer ${data.access_token}` }
+                    });
+                    const userData = await userResponse.json();
+
+                    userId = userData.id;
+                    authToken = data.access_token;
+                    document.getElementById('myUserId').value = userId;
+                    document.getElementById('authSection').style.display = 'none';
+                    document.getElementById('callSection').style.display = 'block';
+
+                    log(`Logged in as: ${userData.username} (${userId})`, 'success');
+                } else {
+                    log(`Login failed: ${data.detail}`, 'error');
+                }
+            } catch (error) {
+                log(`Error: ${error.message}`, 'error');
+            }
+        }
+
+        function connectWebSocket() {
+            if (ws) return;
+
+            ws = new WebSocket(`${WS_URL}/ws/${userId}`);
+
+            ws.onopen = () => {
+                log('WebSocket connected', 'success');
+                updateStatus('Connected', 'connected');
+                document.getElementById('startCallBtn').disabled = false;
+                document.getElementById('refreshBtn').disabled = false;
+                refreshUsers();
+            };
+
+            ws.onmessage = async (event) => {
+                const data = JSON.parse(event.data);
+                log(`Received: ${data.type}`, 'info');
+
+                switch(data.type) {
+                    case 'incoming_call':
+                        await handleIncomingCall(data);
+                        break;
+                    case 'offer':
+                        await handleOffer(data);
+                        break;
+                    case 'answer':
+                        await handleAnswer(data);
+                        break;
+                    case 'ice':
+                        await handleIceCandidate(data);
+                        break;
+                    case 'call_ended':
+                        handleCallEnded(data);
+                        break;
+                    case 'status_update':
+                        handleStatusUpdate(data);
+                        break;
+                }
+            };
+
+            ws.onerror = (error) => {
+                log(`WebSocket error: ${error}`, 'error');
+            };
+
+            ws.onclose = () => {
+                log('WebSocket disconnected', 'error');
+                updateStatus('Disconnected', 'disconnected');
+                document.getElementById('startCallBtn').disabled = true;
+                document.getElementById('refreshBtn').disabled = true;
+                document.getElementById('usersSection').style.display = 'none';
+                ws = null;
+            };
+        }
+
+        async function refreshUsers() {
+            try {
+                const response = await fetch(`${API_URL}/api/users/online`, {
+                    headers: { 'Authorization': `Bearer ${authToken}` }
+                });
+
+                const data = await response.json();
+                if (response.ok) {
+                    displayUsers(data.users);
+                    log(`Found ${data.total} online users`, 'success');
+                } else {
+                    log(`Failed to fetch users: ${data.detail}`, 'error');
+                }
+            } catch (error) {
+                log(`Error fetching users: ${error.message}`, 'error');
+            }
+        }
+
+        function displayUsers(users) {
+            const usersList = document.getElementById('usersList');
+            const usersSection = document.getElementById('usersSection');
+
+            if (users.length === 0) {
+                usersList.innerHTML = '<p style="color: #666; text-align: center; padding: 10px;">No online users</p>';
+            } else {
+                usersList.innerHTML = users.map(user => `
+                    <div style="padding: 10px; margin: 5px 0; background: white; border-radius: 6px; display: flex; justify-content: space-between; align-items: center; border-left: 4px solid ${user.in_call ? '#ffc107' : '#28a745'};">
+                        <div>
+                            <strong>${user.username}</strong>
+                            <br>
+                            <small style="color: #666;">${user.id}</small>
+                            <br>
+                            <span style="color: ${user.in_call ? '#ffc107' : '#28a745'}; font-size: 12px;">
+                                ${user.in_call ? '📞 In Call' : '🟢 Available'}
+                            </span>
+                        </div>
+                        <button onclick="callUser('${user.id}')" ${user.in_call ? 'disabled' : ''}
+                            style="padding: 8px 16px; background: #667eea; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px;">
+                            Call
+                        </button>
+                    </div>
+                `).join('');
+            }
+
+            usersSection.style.display = 'block';
+        }
+
+        function callUser(targetId) {
+            document.getElementById('targetUserId').value = targetId;
+            startCall();
+        }
+
+        function handleStatusUpdate(data) {
+            log(`Status update: ${data.user_id} is ${data.status}`, 'info');
+            // Refresh users list if visible
+            if (document.getElementById('usersSection').style.display !== 'none') {
+                refreshUsers();
+            }
+        }
+
+        function disconnectWebSocket() {
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+        }
+
+        async function startCall() {
+            const targetUserId = document.getElementById('targetUserId').value;
+            if (!targetUserId) {
+                alert('Please enter a user ID to call');
+                return;
+            }
+
+            // Get local media
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({
+                    video: true,
+                    audio: true
+                });
+                document.getElementById('localVideo').srcObject = localStream;
+                document.getElementById('videoContainer').classList.add('active');
+            } catch (error) {
+                log(`Media error: ${error.message}`, 'error');
+                return;
+            }
+
+            // Send start_call
+            ws.send(JSON.stringify({
+                type: 'start_call',
+                receiver_id: targetUserId
+            }));
+
+            updateStatus('Calling...', 'calling');
+            document.getElementById('startCallBtn').disabled = true;
+            document.getElementById('endCallBtn').disabled = false;
+        }
+
+        async function handleIncomingCall(data) {
+            sessionId = data.session_id;
+            log(`Incoming call from: ${data.caller_id}`, 'info');
+
+            const accept = confirm(`Incoming call from ${data.caller_id}. Accept?`);
+            if (accept) {
+                // Get local media
+                localStream = await navigator.mediaDevices.getUserMedia({
+                    video: true,
+                    audio: true
+                });
+                document.getElementById('localVideo').srcObject = localStream;
+                document.getElementById('videoContainer').classList.add('active');
+
+                updateStatus('In call', 'calling');
+                document.getElementById('endCallBtn').disabled = false;
+            }
+        }
+
+        async function createPeerConnection() {
+            peerConnection = new RTCPeerConnection(iceServers);
+
+            // Add local stream
+            localStream.getTracks().forEach(track => {
+                peerConnection.addTrack(track, localStream);
+            });
+
+            // Handle remote stream
+            peerConnection.ontrack = (event) => {
+                document.getElementById('remoteVideo').srcObject = event.streams[0];
+                log('Remote stream received', 'success');
+            };
+
+            // Handle ICE candidates
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    const targetId = document.getElementById('targetUserId').value;
+                    ws.send(JSON.stringify({
+                        type: 'ice',
+                        target_id: targetId,
+                        session_id: sessionId,
+                        candidate: event.candidate
+                    }));
+                }
+            };
+        }
+
+        async function handleOffer(data) {
+            sessionId = data.session_id;
+            await createPeerConnection();
+
+            await peerConnection.setRemoteDescription(new RTCSessionDescription({
+                type: 'offer',
+                sdp: data.sdp
+            }));
+
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+
+            ws.send(JSON.stringify({
+                type: 'answer',
+                caller_id: data.caller_id,
+                session_id: sessionId,
+                sdp: answer.sdp
+            }));
+
+            log('Sent answer', 'success');
+        }
+
+        async function handleAnswer(data) {
+            await peerConnection.setRemoteDescription(new RTCSessionDescription({
+                type: 'answer',
+                sdp: data.sdp
+            }));
+            log('Answer received', 'success');
+        }
+
+        async function handleIceCandidate(data) {
+            if (peerConnection) {
+                await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+            }
+        }
+
+        function handleCallEnded(data) {
+            log('Call ended', 'info');
+            endCall();
+        }
+
+        function endCall() {
+            if (sessionId) {
+                ws.send(JSON.stringify({
+                    type: 'end_call',
+                    session_id: sessionId
+                }));
+            }
+
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
+            }
+
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+                localStream = null;
+            }
+
+            document.getElementById('videoContainer').classList.remove('active');
+            document.getElementById('startCallBtn').disabled = false;
+            document.getElementById('endCallBtn').disabled = true;
+            updateStatus('Connected', 'connected');
+            sessionId = null;
+        }
+    </script>
+</body>
+</html>
