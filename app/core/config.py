@@ -11,6 +11,11 @@ class Settings(BaseSettings):
     # Database
     DATABASE_URL: str = "postgresql://postgres:1111@localhost:5432/nexa_db"
 
+    # Добавляем отдельные поля для PostgreSQL (опционально)
+    POSTGRES_DB: str = "nexa_db"
+    POSTGRES_USER: str = "postgres"
+    POSTGRES_PASSWORD: str = "1111"
+
     # Security
     SECRET_KEY: str = "your-secret-key-change-in-production"
     ALGORITHM: str = "HS256"
@@ -29,6 +34,8 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = True
+        # Разрешаем дополнительные поля (если не хотите их явно определять)
+        extra = "ignore"
 
 
 settings = Settings()

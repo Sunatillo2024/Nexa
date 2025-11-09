@@ -2,6 +2,7 @@ from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from sqlalchemy.orm import Session
+from sqlalchemy import text  # Добавляем импорт text
 
 from .core.config import settings
 from .db.session import init_db, get_db
@@ -80,7 +81,8 @@ def root():
 def health_check(db: Session = Depends(get_db)):
     """Health check endpoint"""
     try:
-        db.execute("SELECT 1")
+        # ИСПРАВЛЕНО: используем text() для сырого SQL
+        db.execute(text("SELECT 1"))
         return {
             "status": "healthy",
             "database": "connected"
