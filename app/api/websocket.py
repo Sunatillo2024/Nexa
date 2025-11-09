@@ -1,7 +1,7 @@
 from fastapi import WebSocket, WebSocketDisconnect, Depends
 from sqlalchemy.orm import Session
 from ..db.session import get_db
-from ..services.websocket_manager import ws_manager
+from ..services.websocket_manager import ConnectionManager as ws_manager
 from ..services.session_manager import session_manager
 from ..services.call_service import CallService
 from ..services.auth_service import AuthService
@@ -104,7 +104,8 @@ async def websocket_endpoint(
         # Handle disconnect
         ws_manager.disconnect(user_id)
         session_manager.handle_disconnect(user_id)
-        await ws_manager.broadcast_status(user_id, "offline")
+        await ws_manager.broadcast_status_update(user_id=user_id, status="offline")
+
 
 
 async def handle_reconnect(user_id: str, websocket: WebSocket, db: Session):
@@ -150,7 +151,7 @@ async def handle_start_call(user_id: str, data: dict, db: Session, websocket: We
         receiver = AuthService.get_user_by_id(db, receiver_id)
 
         # Check if receiver is online
-        if not ws_manager.is_online(receiver_id):
+        if not ws_manager.is_user_online(receiver_id):
             await websocket.send_json({"success": False, "error": "Receiver is offline"})
             return
 
@@ -265,7 +266,7 @@ async def handle_offer(user_id: str, data: dict, websocket: WebSocket):
         "sdp": sdp
     }
 
-    if ws_manager.is_online(receiver_id):
+    if ws_manager.is_user_online(receiver_id):
         await ws_manager.send_to_user(receiver_id, message)
         await websocket.send_json({"success": True})
     else:
@@ -305,7 +306,7 @@ async def handle_answer(user_id: str, data: dict, websocket: WebSocket):
         "sdp": sdp
     }
 
-    if ws_manager.is_online(caller_id):
+    if ws_manager.is_user_online(caller_id):
         await ws_manager.send_to_user(caller_id, message)
         await websocket.send_json({"success": True})
     else:
@@ -342,7 +343,7 @@ async def handle_ice(user_id: str, data: dict, websocket: WebSocket):
         "candidate": candidate
     }
 
-    if ws_manager.is_online(target_id):
+    if ws_manager.is_user_online(target_id):
         await ws_manager.send_to_user(target_id, message)
         await websocket.send_json({"success": True})
     else:

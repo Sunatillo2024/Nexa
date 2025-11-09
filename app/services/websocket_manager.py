@@ -140,6 +140,10 @@ class ConnectionManager:
         """Barcha onlayn foydalanuvchilar ro'yxati"""
         return list(self.active_connections.keys())
 
+    @classmethod
+    def get_reconnect_attempts(cls, user_id):
+        pass
+
 
 # Global instance
 manager = ConnectionManager()
