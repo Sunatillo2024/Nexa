@@ -1,28 +1,42 @@
 from datetime import datetime, timedelta
 from jose import JWTError, jwt
-from passlib.context import CryptContext
+import bcrypt
 from fastapi import HTTPException, status
 import hashlib
 
 from .config import settings
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a password"""
+    # Pre-hash with SHA-256 to handle any length and ensure consistent length
     sha256_hash = hashlib.sha256(plain_password.encode()).hexdigest()
-    return pwd_context.verify(sha256_hash, hashed_password)
+    # Convert to bytes for bcrypt
+    password_bytes = sha256_hash.encode('utf-8')
+    hashed_bytes = hashed_password.encode('utf-8')
+
+    try:
+        return bcrypt.checkpw(password_bytes, hashed_bytes)
+    except Exception as e:
+        return False
 
 
 def hash_password(password: str) -> str:
-    """Hash a password using bcrypt"""
-    # Сначала хешируем SHA-256, затем берем первые 72 байта
-    # Это безопасно, т.к. SHA-256 уже создает криптографически стойкий хеш
+    """Hash a password using bcrypt with SHA-256 pre-hashing"""
+    # Pre-hash with SHA-256 to:
+    # 1. Handle any password length
+    # 2. Create uniform length input (64 hex chars = 64 bytes, under bcrypt's 72 byte limit)
     sha256_hash = hashlib.sha256(password.encode()).hexdigest()
-    # Обрезаем до 72 байт (bcrypt лимит)
-    truncated = sha256_hash[:72]
-    return pwd_context.hash(truncated)
+
+    # Convert to bytes
+    password_bytes = sha256_hash.encode('utf-8')
+
+    # Generate salt and hash with bcrypt
+    salt = bcrypt.gensalt()
+    hashed = bcrypt.hashpw(password_bytes, salt)
+
+    # Return as string
+    return hashed.decode('utf-8')
 
 
 def create_access_token(user_id: str) -> str:
